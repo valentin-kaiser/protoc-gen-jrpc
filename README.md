@@ -1,20 +1,20 @@
 # protoc-gen-go-jrpc
 
-A protoc compiler plugin for Go that generates server stubs for JSON/RPC transport.
+A protoc compiler plugin for Go that generates server stubs for JSON/RPC transport. It is inspired by gRPC but tailored for JSON/RPC.
 
 ## Overview
 
 This plugin generates Go server stub interfaces from protobuf service definitions that match specific method signatures expected by the go-core JSON/RPC API router.
 
-**Important**: This plugin only works in combination with the `protoc-gen-go` plugin and is meant to be used with the Go package `github.com/valentin-kaiser/go-core/web/jrpc`.
+> **Important**: This plugin only works in combination with the `protoc-gen-go` plugin and is meant to be used with the Go package `github.com/valentin-kaiser/go-core/web/jrpc`.
 
 ## Installation
 
 ### Prerequisites
 
 - [Protocol Buffers compiler (protoc)](https://protobuf.dev/installation/)
-- [protoc-gen-go](https://github.com/protocolbuffers/protobuf-go) plugin
-- 
+- [protoc-gen-go plugin](https://github.com/protocolbuffers/protobuf-go) 
+
 ### Install protoc-gen-go-jrpc
 
 ```bash
@@ -136,3 +136,11 @@ The plugin generates methods with the following signatures based on streaming ty
 - **Client stream**: `func(ctx context.Context, in chan *In) (*Out, error)`
 - **Server stream**: `func(ctx context.Context, in *In, out chan Out) error`
 - **Bidi stream**: `func(ctx context.Context, in chan *In, out chan Out) error`
+
+## Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+## License
+
+This project is licensed under the BSD 3-Clause License - see the [LICENSE](LICENSE) file for details.
