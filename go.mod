@@ -1,4 +1,4 @@
-module github.com/valentin-kaiser/protoc-gen-go-jrpc
+module github.com/valentin-kaiser/protoc-gen-jrpc
 
 go 1.25.1
 
