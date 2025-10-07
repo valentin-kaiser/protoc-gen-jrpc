@@ -1,0 +1,42 @@
+name: Release Assets
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.25'
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          
+          # Build for multiple platforms
+          GOOS=linux GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-linux-amd64 ./cmd/protoc-gen-go-jrpc
+          GOOS=linux GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-linux-arm64 ./cmd/protoc-gen-go-jrpc
+          GOOS=darwin GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-darwin-amd64 ./cmd/protoc-gen-go-jrpc
+          GOOS=darwin GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-darwin-arm64 ./cmd/protoc-gen-go-jrpc
+          GOOS=windows GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-windows-amd64.exe ./cmd/protoc-gen-go-jrpc
+          GOOS=windows GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-windows-arm64.exe ./cmd/protoc-gen-go-jrpc
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
