@@ -281,22 +281,22 @@ func (g *fileGenerator) generateMethod(buf *strings.Builder, serviceName string,
 
 	if !isClientStreaming && !isServerStreaming {
 		// Unary
-		signature = fmt.Sprintf("func (Unimplemented%sJRPCServer) %s(ctx context.Context, in *%s) (*%s, error)",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s) (*%s, error)",
 			serviceName, methodName, inputType, outputType)
 		body = g.generateErrorReturn(serviceName, methodName, true)
 	} else if isClientStreaming && !isServerStreaming {
 		// Client streaming
-		signature = fmt.Sprintf("func (Unimplemented%sJRPCServer) %s(ctx context.Context, in chan *%s) (*%s, error)",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s) (*%s, error)",
 			serviceName, methodName, inputType, outputType)
 		body = g.generateErrorReturn(serviceName, methodName, true)
 	} else if !isClientStreaming && isServerStreaming {
 		// Server streaming
-		signature = fmt.Sprintf("func (Unimplemented%sJRPCServer) %s(ctx context.Context, in *%s, out chan %s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan %s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.generateErrorReturn(serviceName, methodName, false)
 	} else {
 		// Bidirectional streaming
-		signature = fmt.Sprintf("func (Unimplemented%sJRPCServer) %s(ctx context.Context, in chan *%s, out chan %s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s, out chan %s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.generateErrorReturn(serviceName, methodName, false)
 	}
