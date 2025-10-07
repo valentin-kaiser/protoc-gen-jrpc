@@ -193,6 +193,7 @@ func (g *fileGenerator) generate(filename string) (*pluginpb.CodeGeneratorRespon
 	buf.WriteString("import (\n")
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"errors\"\n")
+	buf.WriteString("\t\"google.golang.org/protobuf/reflect/protoreflect\"\n")
 	for alias, path := range imports {
 		if alias != "" && alias != filepath.Base(path) {
 			buf.WriteString(fmt.Sprintf("\t%s \"%s\"\n", alias, path))
@@ -261,6 +262,11 @@ func (g *fileGenerator) generateService(buf *strings.Builder, service *protogen.
 
 	// Generate the unimplemented server struct
 	buf.WriteString(fmt.Sprintf("type Unimplemented%sServer struct{}\n\n", serviceName))
+
+	// Generate Descriptor method
+	buf.WriteString(fmt.Sprintf("func (Unimplemented%sServer) Descriptor() protoreflect.FileDescriptor {\n", serviceName))
+	buf.WriteString(fmt.Sprintf("\treturn %s\n", fmt.Sprintf("File_%s_proto", strings.TrimSuffix(filepath.Base(g.file.Desc.Path()), ".proto"))))
+	buf.WriteString("}\n\n")
 
 	// Generate methods for each RPC
 	for _, method := range service.Methods {
