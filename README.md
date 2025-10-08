@@ -102,7 +102,7 @@ func (s *userService) GetUser(ctx context.Context, req *api.GetUserRequest) (*ap
     }, nil
 }
 
-func (s *userService) ListUsers(ctx context.Context, req *api.ListUsersRequest, out chan api.ListUsersResponse) error {
+func (s *userService) ListUsers(ctx context.Context, req *api.ListUsersRequest, out chan *api.ListUsersResponse) error {
     defer close(out)
     
     // Send users to the output channel
@@ -134,8 +134,8 @@ The plugin generates methods with the following signatures based on streaming ty
 
 - **Unary**: `func(ctx context.Context, in *In) (*Out, error)`
 - **Client stream**: `func(ctx context.Context, in chan *In) (*Out, error)`
-- **Server stream**: `func(ctx context.Context, in *In, out chan Out) error`
-- **Bidi stream**: `func(ctx context.Context, in chan *In, out chan Out) error`
+- **Server stream**: `func(ctx context.Context, in *In, out chan *Out) error`
+- **Bidi stream**: `func(ctx context.Context, in chan *In, out chan *Out) error`
 
 ## Contributing
 
