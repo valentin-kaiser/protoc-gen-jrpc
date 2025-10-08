@@ -9,20 +9,49 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/valentin-kaiser/go-core/flag"
+	"github.com/valentin-kaiser/go-core/version"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
+type generator struct {
+	file        *protogen.File
+	opts        *options
+	packageName string
+	importPath  string
+}
+
+type options struct {
+	relative bool
+	module   string
+}
+
 func main() {
+	flag.Unregister("debug")
+	flag.Unregister("path")
+	flag.Init()
+
+	if flag.Help {
+		flag.PrintHelp()
+		return
+	}
+
+	if flag.Version {
+		fmt.Println(version.String())
+		return
+	}
+
 	input, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		log.Fatalf("Failed to read input: %v", err)
 	}
 
 	var req pluginpb.CodeGeneratorRequest
-	if err := proto.Unmarshal(input, &req); err != nil {
+	err = proto.Unmarshal(input, &req)
+	if err != nil {
 		log.Fatalf("Failed to unmarshal request: %v", err)
 	}
 
@@ -32,7 +61,8 @@ func main() {
 		log.Fatalf("Failed to marshal response: %v", err)
 	}
 
-	if _, err := os.Stdout.Write(output); err != nil {
+	_, err = os.Stdout.Write(output)
+	if err != nil {
 		log.Fatalf("Failed to write output: %v", err)
 	}
 }
@@ -53,7 +83,6 @@ func generate(req *pluginpb.CodeGeneratorRequest) *pluginpb.CodeGeneratorRespons
 	}
 
 	var files []*pluginpb.CodeGeneratorResponse_File
-
 	for _, file := range gen.Files {
 		if !file.Generate {
 			continue
@@ -77,11 +106,6 @@ func generate(req *pluginpb.CodeGeneratorRequest) *pluginpb.CodeGeneratorRespons
 	}
 }
 
-type options struct {
-	pathsSourceRelative bool
-	module              string
-}
-
 func parseOptions(parameter string) (*options, error) {
 	opts := &options{}
 
@@ -97,7 +121,7 @@ func parseOptions(parameter string) (*options, error) {
 
 		switch {
 		case param == "paths=source_relative":
-			opts.pathsSourceRelative = true
+			opts.relative = true
 		case strings.HasPrefix(param, "module="):
 			opts.module = strings.TrimPrefix(param, "module=")
 		default:
@@ -113,13 +137,13 @@ func generateFile(file *protogen.File, opts *options) (*pluginpb.CodeGeneratorRe
 		return nil, nil
 	}
 
-	filename := file.Desc.Path()
-	filename = strings.TrimSuffix(filename, ".proto")
+	base := strings.TrimSuffix(file.Desc.Path(), ".proto")
+	finalFilename := base + "_jrpc.pb.go"
 
 	goPackageOpt := ""
 	if file.Desc.Options() != nil {
-		if opts := file.Desc.Options().(*descriptorpb.FileOptions); opts != nil {
-			goPackageOpt = opts.GetGoPackage()
+		if fileOpts := file.Desc.Options().(*descriptorpb.FileOptions); fileOpts != nil {
+			goPackageOpt = fileOpts.GetGoPackage()
 		}
 	}
 
@@ -127,69 +151,50 @@ func generateFile(file *protogen.File, opts *options) (*pluginpb.CodeGeneratorRe
 	importPath := string(file.GoImportPath)
 
 	if goPackageOpt != "" {
+		importPath = goPackageOpt
+		packageName = filepath.Base(goPackageOpt)
+
 		if strings.Contains(goPackageOpt, ";") {
 			parts := strings.Split(goPackageOpt, ";")
 			importPath = parts[0]
 			packageName = parts[1]
-		} else {
-			importPath = goPackageOpt
-			packageName = filepath.Base(goPackageOpt)
 		}
 	}
 
-	if opts.pathsSourceRelative {
-		// paths=source_relative: keep the file in the same directory as the source proto
-		filename += "_jrpc.pb.go"
-	} else {
-		// Default: use import path but apply module trimming if specified
+	if !opts.relative {
 		outputPath := importPath
 
-		// Apply module trimming if module option is specified
-		if opts.module != "" && strings.HasPrefix(outputPath, opts.module) {
-			// Remove module prefix
-			if outputPath == opts.module {
-				outputPath = ""
-			} else if strings.HasPrefix(outputPath, opts.module+"/") {
-				outputPath = strings.TrimPrefix(outputPath, opts.module+"/")
-			}
+		if opts.module != "" && strings.HasPrefix(outputPath, opts.module) && outputPath != opts.module {
+			outputPath = strings.TrimPrefix(outputPath, opts.module+"/")
+		}
+		if opts.module != "" && outputPath == opts.module {
+			outputPath = ""
 		}
 
 		if outputPath != "" {
 			importDir := strings.ReplaceAll(outputPath, ".", "/")
-			filename = filepath.Join(importDir, filepath.Base(filename)+"_jrpc.pb.go")
-		} else {
-			filename += "_jrpc.pb.go"
+			finalFilename = filepath.Join(importDir, filepath.Base(base)+"_jrpc.pb.go")
 		}
 	}
 
-	generator := &fileGenerator{
+	generator := &generator{
 		file:        file,
 		opts:        opts,
 		packageName: packageName,
 		importPath:  importPath,
 	}
 
-	return generator.generate(filename)
+	return generator.generate(finalFilename)
 }
 
-type fileGenerator struct {
-	file        *protogen.File
-	opts        *options
-	packageName string
-	importPath  string
-}
-
-func (g *fileGenerator) generate(filename string) (*pluginpb.CodeGeneratorResponse_File, error) {
+func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_File, error) {
 	var buf strings.Builder
 
 	buf.WriteString("// Code generated by protoc-gen-go-jrpc. DO NOT EDIT.\n")
 	buf.WriteString(fmt.Sprintf("// source: %s\n\n", g.file.Desc.Path()))
 	buf.WriteString(fmt.Sprintf("package %s\n\n", g.packageName))
 
-	// Collect all imports needed for the service methods
-	imports := g.collectImports()
-
-	// Write imports
+	imports := g.imports()
 	buf.WriteString("import (\n")
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"errors\"\n")
@@ -204,7 +209,7 @@ func (g *fileGenerator) generate(filename string) (*pluginpb.CodeGeneratorRespon
 	buf.WriteString(")\n\n")
 
 	for _, service := range g.file.Services {
-		g.generateService(&buf, service)
+		g.service(&buf, service)
 	}
 
 	formatted, err := format.Source([]byte(buf.String()))
@@ -218,7 +223,7 @@ func (g *fileGenerator) generate(filename string) (*pluginpb.CodeGeneratorRespon
 	}, nil
 }
 
-func (g *fileGenerator) collectImports() map[string]string {
+func (g *generator) imports() map[string]string {
 	imports := make(map[string]string)
 
 	for _, service := range g.file.Services {
@@ -246,7 +251,7 @@ func (g *fileGenerator) collectImports() map[string]string {
 	return imports
 }
 
-func (g *fileGenerator) getGoType(message *protogen.Message) string {
+func (g *generator) goType(message *protogen.Message) string {
 	// Check if the message is from a different package
 	if message.GoIdent.GoImportPath != g.file.GoImportPath {
 		// Use the package name as prefix for external types
@@ -257,7 +262,7 @@ func (g *fileGenerator) getGoType(message *protogen.Message) string {
 	return string(message.GoIdent.GoName)
 }
 
-func (g *fileGenerator) generateService(buf *strings.Builder, service *protogen.Service) {
+func (g *generator) service(buf *strings.Builder, service *protogen.Service) {
 	serviceName := string(service.Desc.Name())
 
 	// Generate the unimplemented server struct
@@ -270,14 +275,14 @@ func (g *fileGenerator) generateService(buf *strings.Builder, service *protogen.
 
 	// Generate methods for each RPC
 	for _, method := range service.Methods {
-		g.generateMethod(buf, serviceName, method)
+		g.method(buf, serviceName, method)
 	}
 }
 
-func (g *fileGenerator) generateMethod(buf *strings.Builder, serviceName string, method *protogen.Method) {
+func (g *generator) method(buf *strings.Builder, serviceName string, method *protogen.Method) {
 	methodName := string(method.Desc.Name())
-	inputType := g.getGoType(method.Input)
-	outputType := g.getGoType(method.Output)
+	inputType := g.goType(method.Input)
+	outputType := g.goType(method.Output)
 
 	isClientStreaming := method.Desc.IsStreamingClient()
 	isServerStreaming := method.Desc.IsStreamingServer()
@@ -285,26 +290,27 @@ func (g *fileGenerator) generateMethod(buf *strings.Builder, serviceName string,
 	// Determine method signature based on streaming
 	var signature, body string
 
-	if !isClientStreaming && !isServerStreaming {
+	switch {
+	case !isClientStreaming && !isServerStreaming:
 		// Unary
 		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s) (*%s, error)",
 			serviceName, methodName, inputType, outputType)
-		body = g.generateErrorReturn(serviceName, methodName, true)
-	} else if isClientStreaming && !isServerStreaming {
+		body = g.errorReturn(serviceName, methodName, true)
+	case isClientStreaming && !isServerStreaming:
 		// Client streaming
 		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s) (*%s, error)",
 			serviceName, methodName, inputType, outputType)
-		body = g.generateErrorReturn(serviceName, methodName, true)
-	} else if !isClientStreaming && isServerStreaming {
+		body = g.errorReturn(serviceName, methodName, true)
+	case !isClientStreaming && isServerStreaming:
 		// Server streaming
 		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan %s) error",
 			serviceName, methodName, inputType, outputType)
-		body = g.generateErrorReturn(serviceName, methodName, false)
-	} else {
+		body = g.errorReturn(serviceName, methodName, false)
+	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
 		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s, out chan %s) error",
 			serviceName, methodName, inputType, outputType)
-		body = g.generateErrorReturn(serviceName, methodName, false)
+		body = g.errorReturn(serviceName, methodName, false)
 	}
 
 	buf.WriteString(fmt.Sprintf("%s {\n", signature))
@@ -312,7 +318,7 @@ func (g *fileGenerator) generateMethod(buf *strings.Builder, serviceName string,
 	buf.WriteString("}\n\n")
 }
 
-func (g *fileGenerator) generateErrorReturn(serviceName, methodName string, needsNilReturn bool) string {
+func (g *generator) errorReturn(serviceName, methodName string, needsNilReturn bool) string {
 	errorMsg := fmt.Sprintf("method %s.%s not implemented", serviceName, methodName)
 	errorCall := fmt.Sprintf("errors.New(\"%s\")", errorMsg)
 
