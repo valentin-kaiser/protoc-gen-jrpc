@@ -199,6 +199,7 @@ func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_F
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"errors\"\n")
 	buf.WriteString("\t\"google.golang.org/protobuf/reflect/protoreflect\"\n")
+	buf.WriteString("\t\"github.com/valentin-kaiser/go-core/web/jrpc\"\n")
 	for alias, path := range imports {
 		if alias != "" && alias != filepath.Base(path) {
 			buf.WriteString(fmt.Sprintf("\t%s \"%s\"\n", alias, path))
@@ -265,6 +266,9 @@ func (g *generator) goType(message *protogen.Message) string {
 func (g *generator) service(buf *strings.Builder, service *protogen.Service) {
 	serviceName := string(service.Desc.Name())
 
+	// Generate the service interface
+	g.generateInterface(buf, serviceName, service)
+
 	// Generate the unimplemented server struct
 	buf.WriteString(fmt.Sprintf("type Unimplemented%sServer struct{}\n\n", serviceName))
 
@@ -277,6 +281,9 @@ func (g *generator) service(buf *strings.Builder, service *protogen.Service) {
 	for _, method := range service.Methods {
 		g.method(buf, serviceName, method)
 	}
+
+	// Generate registration function
+	g.generateRegistrationFunction(buf, serviceName)
 }
 
 func (g *generator) method(buf *strings.Builder, serviceName string, method *protogen.Method) {
@@ -303,12 +310,12 @@ func (g *generator) method(buf *strings.Builder, serviceName string, method *pro
 		body = g.errorReturn(serviceName, methodName, true)
 	case !isClientStreaming && isServerStreaming:
 		// Server streaming
-		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan %s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan *%s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.errorReturn(serviceName, methodName, false)
 	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
-		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s, out chan %s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s, out chan *%s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.errorReturn(serviceName, methodName, false)
 	}
@@ -327,4 +334,64 @@ func (g *generator) errorReturn(serviceName, methodName string, needsNilReturn b
 	} else {
 		return fmt.Sprintf("return %s", errorCall)
 	}
+}
+
+func (g *generator) generateInterface(buf *strings.Builder, serviceName string, service *protogen.Service) {
+	buf.WriteString(fmt.Sprintf("// %sServer is the server API for %s service.\n", serviceName, serviceName))
+	buf.WriteString(fmt.Sprintf("type %sServer interface {\n", serviceName))
+
+	// Add Descriptor method to interface
+	buf.WriteString("\tDescriptor() protoreflect.FileDescriptor\n")
+
+	// Generate interface methods
+	for _, method := range service.Methods {
+		g.generateInterfaceMethod(buf, method)
+	}
+
+	buf.WriteString("}\n\n")
+}
+
+func (g *generator) generateInterfaceMethod(buf *strings.Builder, method *protogen.Method) {
+	methodName := string(method.Desc.Name())
+	inputType := g.goType(method.Input)
+	outputType := g.goType(method.Output)
+
+	isClientStreaming := method.Desc.IsStreamingClient()
+	isServerStreaming := method.Desc.IsStreamingServer()
+
+	// Generate method signature based on streaming type
+	var signature string
+
+	switch {
+	case !isClientStreaming && !isServerStreaming:
+		// Unary
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s) (*%s, error)",
+			methodName, inputType, outputType)
+	case isClientStreaming && !isServerStreaming:
+		// Client streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s) (*%s, error)",
+			methodName, inputType, outputType)
+	case !isClientStreaming && isServerStreaming:
+		// Server streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan *%s) error",
+			methodName, inputType, outputType)
+	case isClientStreaming && isServerStreaming:
+		// Bidirectional streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s, out chan *%s) error",
+			methodName, inputType, outputType)
+	}
+
+	buf.WriteString(fmt.Sprintf("%s\n", signature))
+}
+
+func (g *generator) generateRegistrationFunction(buf *strings.Builder, serviceName string) {
+	buf.WriteString(fmt.Sprintf("// Register%sServer registers a %sServer with the JSON-RPC service registry.\n", serviceName, serviceName))
+	buf.WriteString("// It returns a *jrpc.Service that can be used to handle JSON-RPC requests.\n")
+	buf.WriteString(fmt.Sprintf("func Register%sServer(server %sServer) *jrpc.Service {\n", serviceName, serviceName))
+	buf.WriteString("\treturn jrpc.Register(server)\n")
+	buf.WriteString("}\n\n")
+
+	// Add compile-time interface check
+	buf.WriteString(fmt.Sprintf("// Ensure Unimplemented%sServer implements %sServer\n", serviceName, serviceName))
+	buf.WriteString(fmt.Sprintf("var _ %sServer = (*Unimplemented%sServer)(nil)\n\n", serviceName, serviceName))
 }
