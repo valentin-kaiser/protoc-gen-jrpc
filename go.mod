@@ -4,7 +4,7 @@ go 1.25.1
 
 require (
 	github.com/valentin-kaiser/go-core v1.5.1
-	google.golang.org/protobuf v1.36.10
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
