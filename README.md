@@ -220,8 +220,6 @@ func main() {
 }
 ```
 
-See [EXAMPLE_CLIENT.md](EXAMPLE_CLIENT.md) for more detailed client examples.
-
 ## Generated Code
 
 For each service defined in your `.proto` file, the plugin generates:
@@ -232,8 +230,8 @@ For each service defined in your `.proto` file, the plugin generates:
 - `Register{Service}Server` function to register with the jRPC router
 
 ### Client Side
-- `{Service}Client` interface with all unary RPC methods
-- `{Service}ClientImpl` struct implementing the client interface
+- `{Service}ClientDefinition` interface with all RPC methods
+- `{Service}Client` struct implementing the client interface
 - `New{Service}Client` constructor function
 
 ## Contributing
