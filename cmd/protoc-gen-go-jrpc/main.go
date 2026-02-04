@@ -201,7 +201,13 @@ func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_F
 	buf.WriteString("import (\n")
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"errors\"\n")
-	buf.WriteString("\t\"net/url\"\n")
+	if hasStreaming {
+		buf.WriteString("\t\"fmt\"\n")
+	}
+	// net/url is used in client code for all methods
+	if len(g.file.Services) > 0 {
+		buf.WriteString("\t\"net/url\"\n")
+	}
 	if hasStreaming {
 		buf.WriteString("\t\"google.golang.org/protobuf/proto\"\n")
 	}
@@ -520,11 +526,14 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		buf.WriteString(fmt.Sprintf("\tu = u.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString("\t// Convert typed channel to proto.Message channel\n")
 		buf.WriteString("\tinChan := make(chan proto.Message, cap(in))\n")
+		buf.WriteString("\terrChan := make(chan struct{})\n")
 		buf.WriteString("\tgo func() {\n")
 		buf.WriteString("\t\tdefer close(inChan)\n")
 		buf.WriteString("\t\tfor {\n")
 		buf.WriteString("\t\t\tselect {\n")
 		buf.WriteString("\t\t\tcase <-ctx.Done():\n")
+		buf.WriteString("\t\t\t\treturn\n")
+		buf.WriteString("\t\t\tcase <-errChan:\n")
 		buf.WriteString("\t\t\t\treturn\n")
 		buf.WriteString("\t\t\tcase msg, ok := <-in:\n")
 		buf.WriteString("\t\t\t\tif !ok {\n")
@@ -533,6 +542,8 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		buf.WriteString("\t\t\t\tselect {\n")
 		buf.WriteString("\t\t\t\tcase <-ctx.Done():\n")
 		buf.WriteString("\t\t\t\t\treturn\n")
+		buf.WriteString("\t\t\t\tcase <-errChan:\n")
+		buf.WriteString("\t\t\t\t\treturn\n")
 		buf.WriteString("\t\t\t\tcase inChan <- msg:\n")
 		buf.WriteString("\t\t\t\t}\n")
 		buf.WriteString("\t\t\t}\n")
@@ -540,6 +551,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		buf.WriteString("\t}()\n")
 		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
 		buf.WriteString("\terr = c.client.ClientStream(ctx, *u, inChan, out)\n")
+		buf.WriteString("\tclose(errChan)\n")
 		buf.WriteString("\tif err != nil {\n")
 		buf.WriteString("\t\treturn nil, err\n")
 		buf.WriteString("\t}\n")
