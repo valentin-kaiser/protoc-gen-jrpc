@@ -1,4 +1,4 @@
-.PHONY: build build-linux build-windows clean
+.PHONY: build build-linux build-windows build-all clean install
 
 # Build for current platform
 build:
