@@ -198,6 +198,9 @@ func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_F
 	buf.WriteString("import (\n")
 	buf.WriteString("\t\"context\"\n")
 	buf.WriteString("\t\"errors\"\n")
+	if len(g.file.Services) > 0 {
+		buf.WriteString("\t\"net/url\"\n")
+	}
 	buf.WriteString("\t\"google.golang.org/protobuf/reflect/protoreflect\"\n")
 	buf.WriteString("\t\"github.com/valentin-kaiser/go-core/web/jrpc\"\n")
 	for alias, path := range imports {
@@ -213,14 +216,20 @@ func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_F
 		g.service(&buf, service)
 	}
 
-	formatted, err := format.Source([]byte(buf.String()))
+	content := buf.String()
+
+	// Try to format the generated code using gofmt
+	formatted, err := format.Source([]byte(content))
 	if err != nil {
-		return nil, fmt.Errorf("failed to format generated code: %v", err)
+		// If formatting fails, return unformatted code with a warning comment
+		log.Printf("Warning: failed to format generated code for %s: %v", filename, err)
+	} else {
+		content = string(formatted)
 	}
 
 	return &pluginpb.CodeGeneratorResponse_File{
 		Name:    proto.String(filename),
-		Content: proto.String(string(formatted)),
+		Content: proto.String(content),
 	}, nil
 }
 
@@ -284,6 +293,10 @@ func (g *generator) service(buf *strings.Builder, service *protogen.Service) {
 
 	// Generate registration function
 	g.generateRegistrationFunction(buf, serviceName)
+
+	// Generate client interface and implementation
+	g.generateClientInterface(buf, serviceName, service)
+	g.generateClientStruct(buf, serviceName, service)
 }
 
 func (g *generator) method(buf *strings.Builder, serviceName string, method *protogen.Method) {
@@ -382,6 +395,137 @@ func (g *generator) generateInterfaceMethod(buf *strings.Builder, method *protog
 	}
 
 	buf.WriteString(fmt.Sprintf("%s\n", signature))
+}
+
+func (g *generator) generateClientInterface(buf *strings.Builder, serviceName string, service *protogen.Service) {
+	buf.WriteString(fmt.Sprintf("// %sClientDefinition is the client API for %s service.\n", serviceName, serviceName))
+	buf.WriteString(fmt.Sprintf("type %sClientDefinition interface {\n", serviceName))
+
+	// Generate interface methods for all streaming types
+	for _, method := range service.Methods {
+		g.generateClientInterfaceMethod(buf, method)
+	}
+
+	buf.WriteString("}\n\n")
+}
+
+func (g *generator) generateClientInterfaceMethod(buf *strings.Builder, method *protogen.Method) {
+	methodName := string(method.Desc.Name())
+	inputType := g.goType(method.Input)
+	outputType := g.goType(method.Output)
+
+	isClientStreaming := method.Desc.IsStreamingClient()
+	isServerStreaming := method.Desc.IsStreamingServer()
+
+	// Generate method signature based on streaming type
+	var signature string
+
+	switch {
+	case !isClientStreaming && !isServerStreaming:
+		// Unary
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s) (*%s, error)",
+			methodName, inputType, outputType)
+	case isClientStreaming && !isServerStreaming:
+		// Client streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s) (*%s, error)",
+			methodName, inputType, outputType)
+	case !isClientStreaming && isServerStreaming:
+		// Server streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan *%s) error",
+			methodName, inputType, outputType)
+	case isClientStreaming && isServerStreaming:
+		// Bidirectional streaming
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s, out chan *%s) error",
+			methodName, inputType, outputType)
+	}
+
+	buf.WriteString(fmt.Sprintf("%s\n", signature))
+}
+
+func (g *generator) generateClientStruct(buf *strings.Builder, serviceName string, service *protogen.Service) {
+	// Generate client struct
+	buf.WriteString(fmt.Sprintf("type %sClient struct {\n", serviceName))
+	buf.WriteString("\tclient *jrpc.Client\n")
+	buf.WriteString("\tbaseURL *url.URL\n")
+	buf.WriteString("}\n\n")
+
+	// Generate New client function
+	buf.WriteString(fmt.Sprintf("// New%sClient creates a new client for the %s service.\n", serviceName, serviceName))
+	buf.WriteString("// It parses and validates the baseURL, returning an error if the URL is malformed.\n")
+	buf.WriteString(fmt.Sprintf("func New%sClient(baseURL string, opts ...jrpc.ClientOption) (*%sClient, error) {\n", serviceName, serviceName))
+	buf.WriteString("\tparsedURL, err := url.Parse(baseURL)\n")
+	buf.WriteString("\tif err != nil {\n")
+	buf.WriteString("\t\treturn nil, err\n")
+	buf.WriteString("\t}\n")
+	buf.WriteString(fmt.Sprintf("\treturn &%sClient{\n", serviceName))
+	buf.WriteString("\t\tclient: jrpc.NewClient(opts...),\n")
+	buf.WriteString("\t\tbaseURL: parsedURL,\n")
+	buf.WriteString("\t}, nil\n")
+	buf.WriteString("}\n\n")
+
+	// Generate client methods for all streaming types
+	for _, method := range service.Methods {
+		g.generateClientMethod(buf, serviceName, method)
+	}
+
+	// Add compile-time interface check
+	buf.WriteString(fmt.Sprintf("// Ensure %sClient implements %sClientDefinition\n", serviceName, serviceName))
+	buf.WriteString(fmt.Sprintf("var _ %sClientDefinition = (*%sClient)(nil)\n\n", serviceName, serviceName))
+}
+
+func (g *generator) generateClientMethod(buf *strings.Builder, serviceName string, method *protogen.Method) {
+	methodName := string(method.Desc.Name())
+	inputType := g.goType(method.Input)
+	outputType := g.goType(method.Output)
+
+	isClientStreaming := method.Desc.IsStreamingClient()
+	isServerStreaming := method.Desc.IsStreamingServer()
+
+	switch {
+	case !isClientStreaming && !isServerStreaming:
+		// Unary
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s) (*%s, error) {\n",
+			serviceName, methodName, inputType, outputType))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
+		buf.WriteString("\terr := c.client.Call(ctx, u, in, out, nil)\n")
+		buf.WriteString("\tif err != nil {\n")
+		buf.WriteString("\t\treturn nil, err\n")
+		buf.WriteString("\t}\n")
+		buf.WriteString("\treturn out, nil\n")
+		buf.WriteString("}\n\n")
+
+	case isClientStreaming && !isServerStreaming:
+		// Client streaming
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s) (*%s, error) {\n",
+			serviceName, methodName, inputType, outputType))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
+		buf.WriteString("\terr := jrpc.ClientStream(c.client, ctx, u, in, out)\n")
+		buf.WriteString("\tif err != nil {\n")
+		buf.WriteString("\t\treturn nil, err\n")
+		buf.WriteString("\t}\n")
+		buf.WriteString("\treturn out, nil\n")
+		buf.WriteString("}\n\n")
+
+	case !isClientStreaming && isServerStreaming:
+		// Server streaming
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s, out chan *%s) error {\n",
+			serviceName, methodName, inputType, outputType))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
+		buf.WriteString("\treturn jrpc.ServerStream(c.client, ctx, u, in, out, factory)\n")
+		buf.WriteString("}\n\n")
+
+	case isClientStreaming && isServerStreaming:
+		// Bidirectional streaming
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s, out chan *%s) error {\n",
+			serviceName, methodName, inputType, outputType))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
+		buf.WriteString("\treturn jrpc.BidirectionalStream(c.client, ctx, u, in, out, factory)\n")
+		buf.WriteString("}\n\n")
+	}
 }
 
 func (g *generator) generateRegistrationFunction(buf *strings.Builder, serviceName string) {
