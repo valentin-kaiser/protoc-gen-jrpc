@@ -446,16 +446,21 @@ func (g *generator) generateClientStruct(buf *strings.Builder, serviceName strin
 	// Generate client struct
 	buf.WriteString(fmt.Sprintf("type %sClient struct {\n", serviceName))
 	buf.WriteString("\tclient *jrpc.Client\n")
-	buf.WriteString("\tbaseURL string\n")
+	buf.WriteString("\tbaseURL *url.URL\n")
 	buf.WriteString("}\n\n")
 
 	// Generate New client function
 	buf.WriteString(fmt.Sprintf("// New%sClient creates a new client for the %s service.\n", serviceName, serviceName))
-	buf.WriteString(fmt.Sprintf("func New%sClient(baseURL string, opts ...jrpc.ClientOption) *%sClient {\n", serviceName, serviceName))
+	buf.WriteString("// It parses and validates the baseURL, returning an error if the URL is malformed.\n")
+	buf.WriteString(fmt.Sprintf("func New%sClient(baseURL string, opts ...jrpc.ClientOption) (*%sClient, error) {\n", serviceName, serviceName))
+	buf.WriteString("\tparsedURL, err := url.Parse(baseURL)\n")
+	buf.WriteString("\tif err != nil {\n")
+	buf.WriteString("\t\treturn nil, err\n")
+	buf.WriteString("\t}\n")
 	buf.WriteString(fmt.Sprintf("\treturn &%sClient{\n", serviceName))
 	buf.WriteString("\t\tclient: jrpc.NewClient(opts...),\n")
-	buf.WriteString("\t\tbaseURL: baseURL,\n")
-	buf.WriteString("\t}\n")
+	buf.WriteString("\t\tbaseURL: parsedURL,\n")
+	buf.WriteString("\t}, nil\n")
 	buf.WriteString("}\n\n")
 
 	// Generate client methods for all streaming types
@@ -481,13 +486,9 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		// Unary
 		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s) (*%s, error) {\n",
 			serviceName, methodName, inputType, outputType))
-		buf.WriteString("\tu, err := url.Parse(c.baseURL)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\treturn nil, err\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString(fmt.Sprintf("\tu = u.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
-		buf.WriteString("\terr = c.client.Call(ctx, u, in, out, nil)\n")
+		buf.WriteString("\terr := c.client.Call(ctx, u, in, out, nil)\n")
 		buf.WriteString("\tif err != nil {\n")
 		buf.WriteString("\t\treturn nil, err\n")
 		buf.WriteString("\t}\n")
@@ -498,13 +499,9 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		// Client streaming
 		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s) (*%s, error) {\n",
 			serviceName, methodName, inputType, outputType))
-		buf.WriteString("\tu, err := url.Parse(c.baseURL)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\treturn nil, err\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString(fmt.Sprintf("\tu = u.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
-		buf.WriteString("\terr = jrpc.ClientStream(c.client, ctx, u, in, out)\n")
+		buf.WriteString("\terr := jrpc.ClientStream(c.client, ctx, u, in, out)\n")
 		buf.WriteString("\tif err != nil {\n")
 		buf.WriteString("\t\treturn nil, err\n")
 		buf.WriteString("\t}\n")
@@ -515,11 +512,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		// Server streaming
 		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s, out chan *%s) error {\n",
 			serviceName, methodName, inputType, outputType))
-		buf.WriteString("\tu, err := url.Parse(c.baseURL)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\treturn err\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString(fmt.Sprintf("\tu = u.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
 		buf.WriteString("\treturn jrpc.ServerStream(c.client, ctx, u, in, out, factory)\n")
 		buf.WriteString("}\n\n")
@@ -528,11 +521,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 		// Bidirectional streaming
 		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s, out chan *%s) error {\n",
 			serviceName, methodName, inputType, outputType))
-		buf.WriteString("\tu, err := url.Parse(c.baseURL)\n")
-		buf.WriteString("\tif err != nil {\n")
-		buf.WriteString("\t\treturn err\n")
-		buf.WriteString("\t}\n")
-		buf.WriteString(fmt.Sprintf("\tu = u.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
+		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
 		buf.WriteString("\treturn jrpc.BidirectionalStream(c.client, ctx, u, in, out, factory)\n")
 		buf.WriteString("}\n\n")
