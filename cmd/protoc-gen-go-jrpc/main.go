@@ -318,17 +318,17 @@ func (g *generator) method(buf *strings.Builder, serviceName string, method *pro
 		body = g.errorReturn(serviceName, methodName, true)
 	case isClientStreaming && !isServerStreaming:
 		// Client streaming
-		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s) (*%s, error)",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in <-chan *%s) (*%s, error)",
 			serviceName, methodName, inputType, outputType)
 		body = g.errorReturn(serviceName, methodName, true)
 	case !isClientStreaming && isServerStreaming:
 		// Server streaming
-		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan *%s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in *%s, out chan<- *%s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.errorReturn(serviceName, methodName, false)
 	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
-		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in chan *%s, out chan *%s) error",
+		signature = fmt.Sprintf("func (Unimplemented%sServer) %s(ctx context.Context, in <-chan *%s, out chan<- *%s) error",
 			serviceName, methodName, inputType, outputType)
 		body = g.errorReturn(serviceName, methodName, false)
 	}
@@ -382,15 +382,15 @@ func (g *generator) generateInterfaceMethod(buf *strings.Builder, method *protog
 			methodName, inputType, outputType)
 	case isClientStreaming && !isServerStreaming:
 		// Client streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s) (*%s, error)",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in <-chan *%s) (*%s, error)",
 			methodName, inputType, outputType)
 	case !isClientStreaming && isServerStreaming:
 		// Server streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan *%s) error",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan<- *%s) error",
 			methodName, inputType, outputType)
 	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s, out chan *%s) error",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in <-chan *%s, out chan<- *%s) error",
 			methodName, inputType, outputType)
 	}
 
@@ -427,15 +427,15 @@ func (g *generator) generateClientInterfaceMethod(buf *strings.Builder, method *
 			methodName, inputType, outputType)
 	case isClientStreaming && !isServerStreaming:
 		// Client streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s) (*%s, error)",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in <-chan *%s) (*%s, error)",
 			methodName, inputType, outputType)
 	case !isClientStreaming && isServerStreaming:
 		// Server streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan *%s) error",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in *%s, out chan<- *%s) error",
 			methodName, inputType, outputType)
 	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
-		signature = fmt.Sprintf("\t%s(ctx context.Context, in chan *%s, out chan *%s) error",
+		signature = fmt.Sprintf("\t%s(ctx context.Context, in <-chan *%s, out chan<- *%s) error",
 			methodName, inputType, outputType)
 	}
 
@@ -497,7 +497,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 
 	case isClientStreaming && !isServerStreaming:
 		// Client streaming
-		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s) (*%s, error) {\n",
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in <-chan *%s) (*%s, error) {\n",
 			serviceName, methodName, inputType, outputType))
 		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tout := &%s{}\n", outputType))
@@ -510,7 +510,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 
 	case !isClientStreaming && isServerStreaming:
 		// Server streaming
-		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s, out chan *%s) error {\n",
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in *%s, out chan<- *%s) error {\n",
 			serviceName, methodName, inputType, outputType))
 		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
@@ -519,7 +519,7 @@ func (g *generator) generateClientMethod(buf *strings.Builder, serviceName strin
 
 	case isClientStreaming && isServerStreaming:
 		// Bidirectional streaming
-		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in chan *%s, out chan *%s) error {\n",
+		buf.WriteString(fmt.Sprintf("func (c *%sClient) %s(ctx context.Context, in <-chan *%s, out chan<- *%s) error {\n",
 			serviceName, methodName, inputType, outputType))
 		buf.WriteString(fmt.Sprintf("\tu := c.baseURL.JoinPath(\"%s\", \"%s\")\n", serviceName, methodName))
 		buf.WriteString(fmt.Sprintf("\tfactory := func() *%s { return &%s{} }\n", outputType, outputType))
