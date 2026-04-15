@@ -3,7 +3,7 @@ module github.com/valentin-kaiser/protoc-gen-jrpc
 go 1.25.1
 
 require (
-	github.com/valentin-kaiser/go-core v1.8.2
+	github.com/valentin-kaiser/go-core v1.9.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -12,6 +12,7 @@ require (
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 )
