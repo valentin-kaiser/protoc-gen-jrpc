@@ -24,14 +24,21 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
+
+          VERSION_PACKAGE=github.com/valentin-kaiser/go-core/version
+          GIT_TAG="${{ github.event.release.tag_name }}"
+          GIT_COMMIT="$(git rev-parse HEAD)"
+          GIT_SHORT="$(git rev-parse --short HEAD)"
+          BUILD_TIME="$(date +%FT%T%z)"
+          LDFLAGS="-X ${VERSION_PACKAGE}.GitTag=${GIT_TAG} -X ${VERSION_PACKAGE}.GitCommit=${GIT_COMMIT} -X ${VERSION_PACKAGE}.GitShort=${GIT_SHORT} -X ${VERSION_PACKAGE}.BuildDate=${BUILD_TIME}"
           
           # Build for multiple platforms
-          GOOS=linux GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-linux-amd64 ./cmd/protoc-gen-go-jrpc
-          GOOS=linux GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-linux-arm64 ./cmd/protoc-gen-go-jrpc
-          GOOS=darwin GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-darwin-amd64 ./cmd/protoc-gen-go-jrpc
-          GOOS=darwin GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-darwin-arm64 ./cmd/protoc-gen-go-jrpc
-          GOOS=windows GOARCH=amd64 go build -o dist/protoc-gen-go-jrpc-windows-amd64.exe ./cmd/protoc-gen-go-jrpc
-          GOOS=windows GOARCH=arm64 go build -o dist/protoc-gen-go-jrpc-windows-arm64.exe ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-linux-amd64 ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-linux-arm64 ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-darwin-amd64 ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-darwin-arm64 ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-windows-amd64.exe ./cmd/protoc-gen-go-jrpc
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o dist/protoc-gen-go-jrpc-windows-arm64.exe ./cmd/protoc-gen-go-jrpc
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
