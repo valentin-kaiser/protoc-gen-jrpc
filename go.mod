@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/valentin-kaiser/go-core v1.11.3
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
