@@ -13,13 +13,13 @@ import (
 
 func TestParseOptions(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          string
-		wantRelative   bool
-		wantOpenAPIDir string
+		name               string
+		input              string
+		wantRelative       bool
+		wantOpenAPIDir     string
 		wantOpenAPIVersion string
-		wantModule     string
-		wantErr        string
+		wantModule         string
+		wantErr            string
 	}{
 		{name: "empty", input: ""},
 		{name: "source relative", input: "paths=source_relative", wantRelative: true},
@@ -178,15 +178,13 @@ func TestGenerate_OpenAPI(t *testing.T) {
 	if _, ok := paths["/StreamService/Unary"].(map[string]any)["post"]; !ok {
 		t.Fatalf("expected unary POST operation, got: %#v", paths["/StreamService/Unary"])
 	}
-	for path, direction := range map[string]string{
-		"/StreamService/ClientStream": "client",
-		"/StreamService/ServerStream": "server",
-		"/StreamService/Bidi":         "bidi",
+	for _, path := range []string{
+		"/StreamService/ClientStream",
+		"/StreamService/ServerStream",
+		"/StreamService/Bidi",
 	} {
-		operation := paths[path].(map[string]any)["get"].(map[string]any)
-		extension := operation["x-jrpc-websocket"].(map[string]any)
-		if got := extension["streaming"]; got != direction {
-			t.Fatalf("expected %s stream direction %q, got %q", path, direction, got)
+		if _, ok := paths[path]; ok {
+			t.Fatalf("streaming path %q must not appear in OpenAPI", path)
 		}
 	}
 
