@@ -1,23 +1,27 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/valentin-kaiser/go-core/flag"
 	"github.com/valentin-kaiser/go-core/version"
 	"google.golang.org/protobuf/compiler/protogen"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
 type generator struct {
 	file        *protogen.File
+	relative    bool
 	genFile     *protogen.GeneratedFile
 	opts        *options
 	packageName string
@@ -43,8 +47,10 @@ var (
 )
 
 type options struct {
-	relative bool
-	module   string
+	relative       bool
+	module         string
+	openAPIDir     string
+	openAPIVersion string
 }
 
 func main() {
@@ -113,9 +119,7 @@ func generate(req *pluginpb.CodeGeneratorRequest) *pluginpb.CodeGeneratorRespons
 			}
 		}
 
-		if generated != nil {
-			files = append(files, generated)
-		}
+		files = append(files, generated...)
 	}
 
 	return &pluginpb.CodeGeneratorResponse{
@@ -142,6 +146,10 @@ func parseOptions(parameter string) (*options, error) {
 			opts.relative = true
 		case strings.HasPrefix(param, "module="):
 			opts.module = strings.TrimPrefix(param, "module=")
+		case strings.HasPrefix(param, "openapi_dir="):
+			opts.openAPIDir = strings.TrimPrefix(param, "openapi_dir=")
+		case strings.HasPrefix(param, "openapi_version="):
+			opts.openAPIVersion = strings.TrimPrefix(param, "openapi_version=")
 		default:
 			return nil, fmt.Errorf("unknown parameter: %s", param)
 		}
@@ -150,7 +158,7 @@ func parseOptions(parameter string) (*options, error) {
 	return opts, nil
 }
 
-func generateFile(plugin *protogen.Plugin, file *protogen.File, opts *options) (*pluginpb.CodeGeneratorResponse_File, error) {
+func generateFile(plugin *protogen.Plugin, file *protogen.File, opts *options) ([]*pluginpb.CodeGeneratorResponse_File, error) {
 	if len(file.Services) == 0 {
 		return nil, nil
 	}
@@ -203,9 +211,234 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, opts *options) (
 		importPath:  importPath,
 	}
 
-	return generator.generate(finalFilename)
+	goFile, err := generator.generate(finalFilename)
+	if err != nil {
+		return nil, err
+	}
+
+	openAPIFile, err := generateOpenAPIFile(file, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return []*pluginpb.CodeGeneratorResponse_File{goFile, openAPIFile}, nil
 }
 
+func generateOpenAPIFile(file *protogen.File, opts *options) (*pluginpb.CodeGeneratorResponse_File, error) {
+	paths := map[string]any{}
+	schemas := map[string]any{}
+	for _, service := range file.Services {
+		for _, method := range service.Methods {
+			addOpenAPISchema(schemas, method.Input)
+			addOpenAPISchema(schemas, method.Output)
+			path := "/" + string(service.Desc.Name()) + "/" + method.GoName
+			operation := map[string]any{
+				"operationId": string(service.Desc.FullName()) + "." + string(method.Desc.Name()),
+			}
+
+			if method.Desc.IsStreamingClient() || method.Desc.IsStreamingServer() {
+				streaming := "server"
+				if method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer() {
+					streaming = "bidi"
+				} else if method.Desc.IsStreamingClient() {
+					streaming = "client"
+				}
+				operation["x-jrpc-websocket"] = map[string]any{
+					"streaming":      streaming,
+					"requestSchema":  openAPISchemaRef(method.Input),
+					"responseSchema": openAPISchemaRef(method.Output),
+				}
+				operation["responses"] = map[string]any{
+					"101": map[string]any{"description": "Switching Protocols"},
+				}
+				paths[path] = map[string]any{"get": operation}
+				continue
+			}
+
+			operation["requestBody"] = map[string]any{
+				"required": true,
+				"content": map[string]any{
+					"application/json": map[string]any{"schema": openAPISchemaRef(method.Input)},
+				},
+			}
+			operation["responses"] = map[string]any{
+				"200": map[string]any{
+					"description": "Success",
+					"content": map[string]any{
+						"application/json": map[string]any{"schema": openAPISchemaRef(method.Output)},
+					},
+				},
+				"default": map[string]any{"description": "Error"},
+			}
+			paths[path] = map[string]any{"post": operation}
+		}
+	}
+
+	document := map[string]any{
+		"openapi": "3.1.0",
+		"info": map[string]any{
+			"title":   string(file.Desc.Package()),
+			"version": openAPIVersion(opts),
+		},
+		"paths": paths,
+		"components": map[string]any{
+			"schemas": schemas,
+		},
+	}
+
+	content, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal OpenAPI document for %s: %w", file.Desc.Path(), err)
+	}
+
+	filename := strings.TrimSuffix(file.Desc.Path(), ".proto") + ".openapi.json"
+	if opts.openAPIDir != "" {
+		filename = filepath.Join(opts.openAPIDir, filename)
+	}
+
+	return &pluginpb.CodeGeneratorResponse_File{
+		Name:    proto.String(filename),
+		Content: proto.String(string(content)),
+	}, nil
+}
+
+func openAPIVersion(opts *options) string {
+	if opts.openAPIVersion != "" {
+		return opts.openAPIVersion
+	}
+	return "0.0.0"
+}
+
+func openAPISchemaRef(message *protogen.Message) map[string]any {
+	return map[string]any{"$ref": "#/components/schemas/" + string(message.Desc.FullName())}
+}
+
+func addOpenAPISchema(schemas map[string]any, message *protogen.Message) {
+	name := string(message.Desc.FullName())
+	if _, exists := schemas[name]; exists {
+		return
+	}
+
+	if schema, ok := openAPIWellKnownSchema(name); ok {
+		schemas[name] = schema
+		return
+	}
+
+	// Insert before visiting fields so recursive message types terminate.
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+	schemas[name] = schema
+	properties := schema["properties"].(map[string]any)
+	oneofFields := map[protoreflect.Name][]string{}
+
+	for _, field := range message.Fields {
+		properties[field.Desc.JSONName()] = openAPIFieldSchema(schemas, field)
+		if oneof := field.Desc.ContainingOneof(); oneof != nil && !oneof.IsSynthetic() {
+			oneofFields[oneof.Name()] = append(oneofFields[oneof.Name()], field.Desc.JSONName())
+		}
+	}
+
+	if len(oneofFields) > 0 {
+		allOf := make([]any, 0, len(oneofFields))
+		oneofNames := make([]string, 0, len(oneofFields))
+		for name := range oneofFields {
+			oneofNames = append(oneofNames, string(name))
+		}
+		sort.Strings(oneofNames)
+
+		for _, name := range oneofNames {
+			fields := oneofFields[protoreflect.Name(name)]
+			choices := make([]any, 0, len(fields)+1)
+			requiredChoices := make([]any, 0, len(fields))
+			for _, field := range fields {
+				requiredChoices = append(requiredChoices, map[string]any{"required": []string{field}})
+			}
+			choices = append(choices, map[string]any{"not": map[string]any{"anyOf": requiredChoices}})
+			for _, field := range fields {
+				others := make([]any, 0, len(fields)-1)
+				for _, other := range fields {
+					if other != field {
+						others = append(others, map[string]any{"required": []string{other}})
+					}
+				}
+				choice := map[string]any{"required": []string{field}}
+				if len(others) > 0 {
+					choice["not"] = map[string]any{"anyOf": others}
+				}
+				choices = append(choices, choice)
+			}
+			allOf = append(allOf, map[string]any{"oneOf": choices})
+		}
+		schema["allOf"] = allOf
+	}
+}
+
+func openAPIFieldSchema(schemas map[string]any, field *protogen.Field) map[string]any {
+	if field.Desc.IsMap() {
+		value := field.Message.Fields[1]
+		return map[string]any{
+			"type":                 "object",
+			"additionalProperties": openAPIFieldSchema(schemas, value),
+		}
+	}
+
+	schema := openAPISingularFieldSchema(schemas, field)
+	if field.Desc.Cardinality() == protoreflect.Repeated {
+		return map[string]any{"type": "array", "items": schema}
+	}
+	return schema
+}
+
+func openAPISingularFieldSchema(schemas map[string]any, field *protogen.Field) map[string]any {
+	switch field.Desc.Kind() {
+	case protoreflect.BoolKind:
+		return map[string]any{"type": "boolean"}
+	case protoreflect.StringKind:
+		return map[string]any{"type": "string"}
+	case protoreflect.BytesKind:
+		return map[string]any{"type": "string", "contentEncoding": "base64"}
+	case protoreflect.Int32Kind, protoreflect.Sint32Kind, protoreflect.Sfixed32Kind:
+		return map[string]any{"type": "integer", "format": "int32"}
+	case protoreflect.Int64Kind, protoreflect.Sint64Kind, protoreflect.Sfixed64Kind:
+		return map[string]any{"type": "integer", "format": "int64"}
+	case protoreflect.Uint32Kind, protoreflect.Fixed32Kind:
+		return map[string]any{"type": "integer", "format": "uint32", "minimum": 0}
+	case protoreflect.Uint64Kind, protoreflect.Fixed64Kind:
+		return map[string]any{"type": "integer", "format": "uint64", "minimum": 0}
+	case protoreflect.FloatKind:
+		return map[string]any{"type": "number", "format": "float"}
+	case protoreflect.DoubleKind:
+		return map[string]any{"type": "number", "format": "double"}
+	case protoreflect.EnumKind:
+		values := make([]int32, 0, field.Enum.Desc.Values().Len())
+		for index := 0; index < field.Enum.Desc.Values().Len(); index++ {
+			values = append(values, int32(field.Enum.Desc.Values().Get(index).Number()))
+		}
+		return map[string]any{"type": "integer", "enum": values}
+	case protoreflect.MessageKind, protoreflect.GroupKind:
+		addOpenAPISchema(schemas, field.Message)
+		return openAPISchemaRef(field.Message)
+	default:
+		return map[string]any{}
+	}
+}
+
+func openAPIWellKnownSchema(name string) (map[string]any, bool) {
+	switch name {
+	case "google.protobuf.Timestamp":
+		return map[string]any{"type": "string", "format": "date-time"}, true
+	case "google.protobuf.Duration":
+		return map[string]any{"type": "string", "format": "duration"}, true
+	case "google.protobuf.Empty":
+		return map[string]any{"type": "object"}, true
+	case "google.protobuf.Any":
+		return map[string]any{"type": "object"}, true
+	default:
+		return nil, false
+	}
+}
 func (g *generator) generate(filename string) (*pluginpb.CodeGeneratorResponse_File, error) {
 	g.genFile.P("// Code generated by protoc-gen-go-jrpc. DO NOT EDIT.")
 	g.genFile.P("// versions:")

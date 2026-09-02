@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -12,16 +13,20 @@ import (
 
 func TestParseOptions(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		wantRelative bool
-		wantModule   string
-		wantErr      string
+		name           string
+		input          string
+		wantRelative   bool
+		wantOpenAPIDir string
+		wantOpenAPIVersion string
+		wantModule     string
+		wantErr        string
 	}{
 		{name: "empty", input: ""},
 		{name: "source relative", input: "paths=source_relative", wantRelative: true},
 		{name: "module only", input: "module=github.com/example", wantModule: "github.com/example"},
 		{name: "combined with spaces", input: " paths=source_relative , module=github.com/example ", wantRelative: true, wantModule: "github.com/example"},
+		{name: "OpenAPI directory", input: "openapi_dir=api/specs", wantOpenAPIDir: "api/specs"},
+		{name: "OpenAPI version", input: "openapi_version=1.2.3", wantOpenAPIVersion: "1.2.3"},
 		{name: "unknown option", input: "paths=source_relative,foo=bar", wantErr: "unknown parameter: foo=bar"},
 	}
 
@@ -49,6 +54,12 @@ func TestParseOptions(t *testing.T) {
 			if opts.module != tt.wantModule {
 				t.Fatalf("expected module=%q, got %q", tt.wantModule, opts.module)
 			}
+			if opts.openAPIDir != tt.wantOpenAPIDir {
+				t.Fatalf("expected openAPIDir=%q, got %q", tt.wantOpenAPIDir, opts.openAPIDir)
+			}
+			if opts.openAPIVersion != tt.wantOpenAPIVersion {
+				t.Fatalf("expected openAPIVersion=%q, got %q", tt.wantOpenAPIVersion, opts.openAPIVersion)
+			}
 		})
 	}
 }
@@ -62,11 +73,11 @@ func TestGenerate_SourceRelativePathOption(t *testing.T) {
 		t.Fatalf("generate returned error: %s", resp.GetError())
 	}
 
-	if len(resp.File) != 1 {
-		t.Fatalf("expected exactly one generated file, got %d", len(resp.File))
+	if len(resp.File) != 2 {
+		t.Fatalf("expected exactly two generated files, got %d", len(resp.File))
 	}
 
-	if got, want := normalizePath(resp.File[0].GetName()), "portal/v1/portal_jrpc.pb.go"; got != want {
+	if got, want := normalizePath(findGeneratedFile(t, resp, ".pb.go").GetName()), "portal/v1/portal_jrpc.pb.go"; got != want {
 		t.Fatalf("expected generated filename %q, got %q", want, got)
 	}
 }
@@ -80,11 +91,11 @@ func TestGenerate_ModulePathOption(t *testing.T) {
 		t.Fatalf("generate returned error: %s", resp.GetError())
 	}
 
-	if len(resp.File) != 1 {
-		t.Fatalf("expected exactly one generated file, got %d", len(resp.File))
+	if len(resp.File) != 2 {
+		t.Fatalf("expected exactly two generated files, got %d", len(resp.File))
 	}
 
-	if got, want := normalizePath(resp.File[0].GetName()), "portal/v1/portal_jrpc.pb.go"; got != want {
+	if got, want := normalizePath(findGeneratedFile(t, resp, ".pb.go").GetName()), "portal/v1/portal_jrpc.pb.go"; got != want {
 		t.Fatalf("expected generated filename %q, got %q", want, got)
 	}
 }
@@ -143,6 +154,110 @@ func TestGenerate_StreamingMethodShapes(t *testing.T) {
 		if !strings.Contains(content, check) {
 			t.Fatalf("expected generated code to contain %q, got:\n%s", check, content)
 		}
+	}
+}
+
+func TestGenerate_OpenAPI(t *testing.T) {
+	resp := generate(buildStreamingRequest())
+	if resp.GetError() != "" {
+		t.Fatalf("generate returned error: %s", resp.GetError())
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal([]byte(findGeneratedFile(t, resp, ".openapi.json").GetContent()), &document); err != nil {
+		t.Fatalf("generated OpenAPI is not valid JSON: %v", err)
+	}
+	if got, want := document["openapi"], "3.1.0"; got != want {
+		t.Fatalf("expected OpenAPI version %q, got %q", want, got)
+	}
+	if got, want := document["info"].(map[string]any)["version"], "0.0.0"; got != want {
+		t.Fatalf("expected default document version %q, got %q", want, got)
+	}
+
+	paths := document["paths"].(map[string]any)
+	if _, ok := paths["/StreamService/Unary"].(map[string]any)["post"]; !ok {
+		t.Fatalf("expected unary POST operation, got: %#v", paths["/StreamService/Unary"])
+	}
+	for path, direction := range map[string]string{
+		"/StreamService/ClientStream": "client",
+		"/StreamService/ServerStream": "server",
+		"/StreamService/Bidi":         "bidi",
+	} {
+		operation := paths[path].(map[string]any)["get"].(map[string]any)
+		extension := operation["x-jrpc-websocket"].(map[string]any)
+		if got := extension["streaming"]; got != direction {
+			t.Fatalf("expected %s stream direction %q, got %q", path, direction, got)
+		}
+	}
+
+	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
+	if _, ok := schemas["stream.v1.Req"]; !ok {
+		t.Fatalf("expected request schema, got: %#v", schemas)
+	}
+}
+
+func TestGenerate_OpenAPIVersion(t *testing.T) {
+	req := buildStreamingRequest()
+	req.Parameter = proto.String("openapi_version=1.2.3")
+	resp := generate(req)
+	if resp.GetError() != "" {
+		t.Fatalf("generate returned error: %s", resp.GetError())
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal([]byte(findGeneratedFile(t, resp, ".openapi.json").GetContent()), &document); err != nil {
+		t.Fatalf("generated OpenAPI is not valid JSON: %v", err)
+	}
+	if got, want := document["info"].(map[string]any)["version"], "1.2.3"; got != want {
+		t.Fatalf("expected document version %q, got %q", want, got)
+	}
+}
+
+func TestGenerate_OpenAPIOutputDirectory(t *testing.T) {
+	req := buildRequestForPortal([]*descriptorpb.FileDescriptorProto{buildMerpTypesProto()})
+	req.Parameter = proto.String("openapi_dir=api/specs")
+
+	resp := generate(req)
+	if resp.GetError() != "" {
+		t.Fatalf("generate returned error: %s", resp.GetError())
+	}
+
+	if got, want := normalizePath(findGeneratedFile(t, resp, ".openapi.json").GetName()), "api/specs/portal/v1/portal.openapi.json"; got != want {
+		t.Fatalf("expected generated OpenAPI filename %q, got %q", want, got)
+	}
+}
+
+func TestGenerate_OpenAPISchemas(t *testing.T) {
+	resp := generate(buildSchemaRequest())
+	if resp.GetError() != "" {
+		t.Fatalf("generate returned error: %s", resp.GetError())
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal([]byte(findGeneratedFile(t, resp, ".openapi.json").GetContent()), &document); err != nil {
+		t.Fatalf("generated OpenAPI is not valid JSON: %v", err)
+	}
+	schemas := document["components"].(map[string]any)["schemas"].(map[string]any)
+	request := schemas["schema.v1.Request"].(map[string]any)
+	properties := request["properties"].(map[string]any)
+
+	if got := properties["displayName"].(map[string]any)["type"]; got != "string" {
+		t.Fatalf("expected JSON field name and string schema, got %#v", properties["displayName"])
+	}
+	if got := properties["numbers"].(map[string]any)["type"]; got != "array" {
+		t.Fatalf("expected repeated field array schema, got %#v", properties["numbers"])
+	}
+	if _, ok := properties["labels"].(map[string]any)["additionalProperties"]; !ok {
+		t.Fatalf("expected map field schema, got %#v", properties["labels"])
+	}
+	if got := properties["status"].(map[string]any)["enum"]; got == nil {
+		t.Fatalf("expected enum schema, got %#v", properties["status"])
+	}
+	if _, ok := request["allOf"]; !ok {
+		t.Fatalf("expected oneof constraint, got %#v", request)
+	}
+	if _, ok := schemas["schema.v1.Request.Child"]; !ok {
+		t.Fatalf("expected nested message schema, got %#v", schemas)
 	}
 }
 
@@ -207,11 +322,20 @@ func mustGenerateSingleContent(t *testing.T, req *pluginpb.CodeGeneratorRequest)
 		t.Fatalf("generate returned error: %s", resp.GetError())
 	}
 
-	if len(resp.File) != 1 {
-		t.Fatalf("expected exactly one generated file, got %d", len(resp.File))
+	return findGeneratedFile(t, resp, ".pb.go").GetContent()
+}
+
+func findGeneratedFile(t *testing.T, resp *pluginpb.CodeGeneratorResponse, suffix string) *pluginpb.CodeGeneratorResponse_File {
+	t.Helper()
+
+	for _, file := range resp.File {
+		if strings.HasSuffix(file.GetName(), suffix) {
+			return file
+		}
 	}
 
-	return resp.File[0].GetContent()
+	t.Fatalf("generated response does not contain a file ending in %q", suffix)
+	return nil
 }
 
 func buildRequestForPortal(externals []*descriptorpb.FileDescriptorProto) *pluginpb.CodeGeneratorRequest {
@@ -324,6 +448,59 @@ func buildStreamingRequest() *pluginpb.CodeGeneratorRequest {
 	return &pluginpb.CodeGeneratorRequest{
 		FileToGenerate: []string{"stream/v1/stream.proto"},
 		ProtoFile:      []*descriptorpb.FileDescriptorProto{stream},
+	}
+}
+
+func buildSchemaRequest() *pluginpb.CodeGeneratorRequest {
+	request := &descriptorpb.DescriptorProto{
+		Name:      proto.String("Request"),
+		OneofDecl: []*descriptorpb.OneofDescriptorProto{{Name: proto.String("selector")}},
+		NestedType: []*descriptorpb.DescriptorProto{
+			{
+				Name:    proto.String("LabelsEntry"),
+				Options: &descriptorpb.MessageOptions{MapEntry: proto.Bool(true)},
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: proto.String("key"), Number: proto.Int32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+					{Name: proto.String("value"), Number: proto.Int32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+				},
+			},
+			{
+				Name: proto.String("Child"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{Name: proto.String("id"), Number: proto.Int32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+				},
+			},
+		},
+		Field: []*descriptorpb.FieldDescriptorProto{
+			{Name: proto.String("display_name"), JsonName: proto.String("displayName"), Number: proto.Int32(1), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
+			{Name: proto.String("numbers"), Number: proto.Int32(2), Label: descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_INT32.Enum()},
+			{Name: proto.String("labels"), Number: proto.Int32(3), Label: descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".schema.v1.Request.LabelsEntry")},
+			{Name: proto.String("status"), Number: proto.Int32(4), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_ENUM.Enum(), TypeName: proto.String(".schema.v1.Status")},
+			{Name: proto.String("child"), Number: proto.Int32(5), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".schema.v1.Request.Child")},
+			{Name: proto.String("by_id"), Number: proto.Int32(6), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), OneofIndex: proto.Int32(0)},
+			{Name: proto.String("by_name"), Number: proto.Int32(7), Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), OneofIndex: proto.Int32(0)},
+		},
+	}
+	file := &descriptorpb.FileDescriptorProto{
+		Name:    proto.String("schema/v1/schema.proto"),
+		Package: proto.String("schema.v1"),
+		Options: &descriptorpb.FileOptions{GoPackage: proto.String("github.com/example/schema/v1;v1")},
+		EnumType: []*descriptorpb.EnumDescriptorProto{{
+			Name:  proto.String("Status"),
+			Value: []*descriptorpb.EnumValueDescriptorProto{{Name: proto.String("STATUS_UNSPECIFIED"), Number: proto.Int32(0)}, {Name: proto.String("STATUS_READY"), Number: proto.Int32(1)}},
+		}},
+		MessageType: []*descriptorpb.DescriptorProto{request, {Name: proto.String("Response")}},
+		Service: []*descriptorpb.ServiceDescriptorProto{{
+			Name: proto.String("SchemaService"),
+			Method: []*descriptorpb.MethodDescriptorProto{{
+				Name: proto.String("Inspect"), InputType: proto.String(".schema.v1.Request"), OutputType: proto.String(".schema.v1.Response"),
+			}},
+		}},
+	}
+
+	return &pluginpb.CodeGeneratorRequest{
+		FileToGenerate: []string{"schema/v1/schema.proto"},
+		ProtoFile:      []*descriptorpb.FileDescriptorProto{file},
 	}
 }
 
