@@ -229,30 +229,15 @@ func generateOpenAPIFile(file *protogen.File, opts *options) (*pluginpb.CodeGene
 	schemas := map[string]any{}
 	for _, service := range file.Services {
 		for _, method := range service.Methods {
+			if method.Desc.IsStreamingClient() || method.Desc.IsStreamingServer() {
+				continue
+			}
+
 			addOpenAPISchema(schemas, method.Input)
 			addOpenAPISchema(schemas, method.Output)
 			path := "/" + string(service.Desc.Name()) + "/" + method.GoName
 			operation := map[string]any{
 				"operationId": string(service.Desc.FullName()) + "." + string(method.Desc.Name()),
-			}
-
-			if method.Desc.IsStreamingClient() || method.Desc.IsStreamingServer() {
-				streaming := "server"
-				if method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer() {
-					streaming = "bidi"
-				} else if method.Desc.IsStreamingClient() {
-					streaming = "client"
-				}
-				operation["x-jrpc-websocket"] = map[string]any{
-					"streaming":      streaming,
-					"requestSchema":  openAPISchemaRef(method.Input),
-					"responseSchema": openAPISchemaRef(method.Output),
-				}
-				operation["responses"] = map[string]any{
-					"101": map[string]any{"description": "Switching Protocols"},
-				}
-				paths[path] = map[string]any{"get": operation}
-				continue
 			}
 
 			operation["requestBody"] = map[string]any{

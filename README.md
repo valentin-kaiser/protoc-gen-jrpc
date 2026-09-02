@@ -15,7 +15,6 @@ This plugin generates Go server stub interfaces and client implementations from 
 - ✅ **Streaming Support**: Server streaming, client streaming, and bidirectional streaming
 - ✅ **Protocol Buffer JSON**: Automatic marshaling/unmarshaling
 - ✅ **Context Support**: Full context propagation for cancellation and timeouts
-- ✅ **WebSocket Support**: Automatic WebSocket connections for all streaming patterns
 - ✅ **OpenAPI 3.1 Generation**: Generate a JSON OpenAPI document for every proto that defines services
 
 ## Installation
@@ -88,7 +87,7 @@ protoc -I . \
 
 The plugin always generates one OpenAPI 3.1 JSON document per input proto with services. By default, the document is written as `{proto path without .proto}.openapi.json` alongside the proto path. Use `openapi_dir=<directory>` to place the document below a separate directory while retaining proto subdirectories. For example, `api/v1/users.proto` becomes `./gen/openapi/api/v1/users.openapi.json` with `openapi_dir=./gen/openapi`. Set `openapi_version=<version>` to control `info.version`; it defaults to `0.0.0`.
 
-Unary operations are documented as `POST /{Service}/{Method}` with Protocol Buffer JSON request and response schemas. The route names match the generated client. Streaming operations are WebSocket upgrades documented as `GET` operations with a `101` response and an `x-jrpc-websocket` extension. The extension contains `streaming` (`client`, `server`, or `bidi`) plus `requestSchema` and `responseSchema` references.
+Unary operations are documented as `POST /{Service}/{Method}` with Protocol Buffer JSON request and response schemas. The route names match the generated client.
 
 3. Implement the generated interface in your Go application:
 
@@ -163,6 +162,7 @@ The plugin generates methods with the following signatures based on streaming ty
 ## Client Usage
 
 The plugin automatically generates client interfaces and implementations for your services. Clients automatically use HTTP for unary calls and WebSocket for streaming calls.
+The plugin automatically generates client interfaces and implementations for unary HTTP RPCs.
 
 ### Unary Call
 
