@@ -3,7 +3,7 @@ module github.com/valentin-kaiser/protoc-gen-jrpc
 go 1.26.0
 
 require (
-	github.com/valentin-kaiser/go-core v1.11.5
+	github.com/valentin-kaiser/go-core v1.11.7
 	google.golang.org/protobuf v1.36.12
 )
 
