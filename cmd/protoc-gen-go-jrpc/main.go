@@ -313,7 +313,8 @@ func openAPIComment(comments protogen.CommentSet) string {
 // openAPIStreamOperation completes the operation of a streaming method.
 // OpenAPI cannot describe WebSockets, so the endpoint is documented as the
 // GET request that performs the upgrade. The messages exchanged afterwards
-// are documented in the description, in the 101 response and in x-stream.
+// are documented in the description and in the x-stream and x-stream-messages
+// extensions; the standard requestBody and 101 content stay handshake-only.
 func openAPIStreamOperation(operation map[string]any, service *protogen.Service, method *protogen.Method) map[string]any {
 	kind, flow := "server", "The client sends one `%s` message as the first text frame; the server then sends any number of `%s` messages and closes the connection when the stream ends."
 	switch {
@@ -332,25 +333,40 @@ func openAPIStreamOperation(operation map[string]any, service *protogen.Service,
 	}
 	operation["description"] = text
 	operation["x-stream"] = kind
-	operation["requestBody"] = map[string]any{
-		"description": "Message sent by the client (as the first frame for server streams).",
-		"content": map[string]any{
-			"application/json": map[string]any{"schema": openAPISchemaRef(method.Input)},
+	// The standard requestBody and the 101 content describe the HTTP upgrade
+	// request and response, not the frames exchanged afterwards, so they are
+	// left out. The frame schemas live in x-stream-messages instead.
+	clientCount, serverCount := "one", "many"
+	switch kind {
+	case "bidi":
+		clientCount = "many"
+	case "client":
+		clientCount, serverCount = "many", "one"
+	}
+	operation["x-stream-messages"] = map[string]any{
+		"encoding": "application/json",
+		"client": map[string]any{
+			"description": "Frame sent by the client after the upgrade.",
+			"count":       clientCount,
+			"schema":      openAPISchemaRef(method.Input),
+		},
+		"server": map[string]any{
+			"description": "Frame sent by the server after the upgrade.",
+			"count":       serverCount,
+			"schema":      openAPISchemaRef(method.Output),
 		},
 	}
 	operation["responses"] = map[string]any{
 		"101": map[string]any{
-			"description": "Switching Protocols. Each message sent by the server is described by this schema.",
-			"content": map[string]any{
-				"application/json": map[string]any{"schema": openAPISchemaRef(method.Output)},
-			},
+			"description": "Switching Protocols. The connection is upgraded to a WebSocket; the frame schemas are described by x-stream-messages.",
 		},
 		"default": map[string]any{"description": "Error"},
 	}
 	operation["x-codeSamples"] = []any{map[string]any{
 		"lang":  "JavaScript",
 		"label": "WebSocket",
-		"source": "const ws = new WebSocket(`wss://${location.host}/bleep/api/v1" + path + "?token=${accessToken}`);\n" +
+		"source": "// baseURL is the API base address with a ws:// or wss:// scheme; add authentication as your deployment requires.\n" +
+			"const ws = new WebSocket(baseURL.replace(/\\/$/, \"\") + \"" + path + "\");\n" +
 			"ws.onopen = () => ws.send(JSON.stringify({ /* " + string(method.Input.Desc.Name()) + " */ }));\n" +
 			"ws.onmessage = (event) => console.log(JSON.parse(event.data)); // " + string(method.Output.Desc.Name()) + "\n",
 	}}
@@ -404,6 +420,10 @@ func addOpenAPISchema(schemas map[string]any, message *protogen.Message) {
 	for _, field := range message.Fields {
 		fieldSchema := openAPIFieldSchema(schemas, field)
 		if description := openAPIComment(field.Comments); description != "" {
+			// Keep the enum legend built by openAPISingularFieldSchema.
+			if existing, ok := fieldSchema["description"].(string); ok && existing != "" {
+				description += "\n\n" + existing
+			}
 			fieldSchema["description"] = description
 		}
 		properties[field.Desc.JSONName()] = fieldSchema
