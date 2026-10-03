@@ -183,8 +183,22 @@ func TestGenerate_OpenAPI(t *testing.T) {
 		"/StreamService/ServerStream",
 		"/StreamService/Bidi",
 	} {
-		if _, ok := paths[path]; ok {
-			t.Fatalf("streaming path %q must not appear in OpenAPI", path)
+		op, ok := paths[path].(map[string]any)["get"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected streaming GET operation for %q, got: %#v", path, paths[path])
+		}
+		if op["x-stream"] == nil || op["responses"].(map[string]any)["101"] == nil {
+			t.Fatalf("streaming operation %q must describe the stream kind and 101 response", path)
+		}
+		if op["requestBody"] != nil {
+			t.Fatalf("streaming operation %q must not declare a requestBody for the handshake", path)
+		}
+		if _, ok := op["responses"].(map[string]any)["101"].(map[string]any)["content"]; ok {
+			t.Fatalf("streaming operation %q must not put frame schemas in the 101 content", path)
+		}
+		messages, ok := op["x-stream-messages"].(map[string]any)
+		if !ok || messages["client"] == nil || messages["server"] == nil {
+			t.Fatalf("streaming operation %q must describe frames in x-stream-messages, got: %#v", path, op)
 		}
 	}
 
@@ -250,6 +264,10 @@ func TestGenerate_OpenAPISchemas(t *testing.T) {
 	}
 	if got := properties["status"].(map[string]any)["enum"]; got == nil {
 		t.Fatalf("expected enum schema, got %#v", properties["status"])
+	}
+	statusDescription, _ := properties["status"].(map[string]any)["description"].(string)
+	if !strings.Contains(statusDescription, "Lifecycle status.") || !strings.Contains(statusDescription, "Ready for use.") {
+		t.Fatalf("expected field comment merged with enum legend, got %q", statusDescription)
 	}
 	if _, ok := request["allOf"]; !ok {
 		t.Fatalf("expected oneof constraint, got %#v", request)
@@ -486,6 +504,10 @@ func buildSchemaRequest() *pluginpb.CodeGeneratorRequest {
 		EnumType: []*descriptorpb.EnumDescriptorProto{{
 			Name:  proto.String("Status"),
 			Value: []*descriptorpb.EnumValueDescriptorProto{{Name: proto.String("STATUS_UNSPECIFIED"), Number: proto.Int32(0)}, {Name: proto.String("STATUS_READY"), Number: proto.Int32(1)}},
+		}},
+		SourceCodeInfo: &descriptorpb.SourceCodeInfo{Location: []*descriptorpb.SourceCodeInfo_Location{
+			{Path: []int32{4, 0, 2, 3}, Span: []int32{1, 0, 1}, LeadingComments: proto.String(" Lifecycle status.\n")},
+			{Path: []int32{5, 0, 2, 1}, Span: []int32{2, 0, 1}, LeadingComments: proto.String(" Ready for use.\n")},
 		}},
 		MessageType: []*descriptorpb.DescriptorProto{request, {Name: proto.String("Response")}},
 		Service: []*descriptorpb.ServiceDescriptorProto{{
