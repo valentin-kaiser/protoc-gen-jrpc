@@ -183,8 +183,12 @@ func TestGenerate_OpenAPI(t *testing.T) {
 		"/StreamService/ServerStream",
 		"/StreamService/Bidi",
 	} {
-		if _, ok := paths[path]; ok {
-			t.Fatalf("streaming path %q must not appear in OpenAPI", path)
+		op, ok := paths[path].(map[string]any)["get"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected streaming GET operation for %q, got: %#v", path, paths[path])
+		}
+		if op["x-stream"] == nil || op["responses"].(map[string]any)["101"] == nil {
+			t.Fatalf("streaming operation %q must describe the stream kind and 101 response", path)
 		}
 	}
 

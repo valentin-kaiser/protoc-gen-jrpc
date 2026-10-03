@@ -227,17 +227,29 @@ func generateFile(plugin *protogen.Plugin, file *protogen.File, opts *options) (
 func generateOpenAPIFile(file *protogen.File, opts *options) (*pluginpb.CodeGeneratorResponse_File, error) {
 	paths := map[string]any{}
 	schemas := map[string]any{}
+	tags := []any{}
 	for _, service := range file.Services {
+		tag := map[string]any{"name": string(service.Desc.Name())}
+		if description := openAPIComment(service.Comments); description != "" {
+			tag["description"] = description
+		}
+		tags = append(tags, tag)
 		for _, method := range service.Methods {
-			if method.Desc.IsStreamingClient() || method.Desc.IsStreamingServer() {
-				continue
-			}
-
 			addOpenAPISchema(schemas, method.Input)
 			addOpenAPISchema(schemas, method.Output)
 			path := "/" + string(service.Desc.Name()) + "/" + method.GoName
 			operation := map[string]any{
 				"operationId": string(service.Desc.FullName()) + "." + string(method.Desc.Name()),
+				"tags":        []string{string(service.Desc.Name())},
+			}
+			if description := openAPIComment(method.Comments); description != "" {
+				operation["summary"] = openAPISummary(description)
+				operation["description"] = description
+			}
+
+			if method.Desc.IsStreamingClient() || method.Desc.IsStreamingServer() {
+				paths[path] = map[string]any{"get": openAPIStreamOperation(operation, service, method)}
+				continue
 			}
 
 			operation["requestBody"] = map[string]any{
@@ -265,6 +277,7 @@ func generateOpenAPIFile(file *protogen.File, opts *options) (*pluginpb.CodeGene
 			"title":   string(file.Desc.Package()),
 			"version": openAPIVersion(opts),
 		},
+		"tags":  tags,
 		"paths": paths,
 		"components": map[string]any{
 			"schemas": schemas,
@@ -285,6 +298,73 @@ func generateOpenAPIFile(file *protogen.File, opts *options) (*pluginpb.CodeGene
 		Name:    proto.String(filename),
 		Content: proto.String(string(content)),
 	}, nil
+}
+
+// openAPIComment returns the leading comment of a proto element as plain text,
+// or "" when it has none.
+func openAPIComment(comments protogen.CommentSet) string {
+	lines := strings.Split(strings.TrimSpace(string(comments.Leading)), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// openAPIStreamOperation completes the operation of a streaming method.
+// OpenAPI cannot describe WebSockets, so the endpoint is documented as the
+// GET request that performs the upgrade. The messages exchanged afterwards
+// are documented in the description, in the 101 response and in x-stream.
+func openAPIStreamOperation(operation map[string]any, service *protogen.Service, method *protogen.Method) map[string]any {
+	kind, flow := "server", "The client sends one `%s` message as the first text frame; the server then sends any number of `%s` messages and closes the connection when the stream ends."
+	switch {
+	case method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer():
+		kind, flow = "bidi", "Both sides send messages independently: the client sends `%s` messages and the server sends `%s` messages, each as one JSON text frame."
+	case method.Desc.IsStreamingClient():
+		kind, flow = "client", "The client sends any number of `%s` messages as text frames; the server answers with a single `%s` message."
+	}
+
+	path := "/" + string(service.Desc.Name()) + "/" + method.GoName
+	text := "**WebSocket endpoint.** Connect with a WebSocket upgrade request to this path (`ws://` or `wss://`). " +
+		fmt.Sprintf(flow, method.Input.Desc.Name(), method.Output.Desc.Name()) +
+		" Messages are JSON text frames using the schemas below."
+	if description, ok := operation["description"].(string); ok {
+		text = description + "\n\n" + text
+	}
+	operation["description"] = text
+	operation["x-stream"] = kind
+	operation["requestBody"] = map[string]any{
+		"description": "Message sent by the client (as the first frame for server streams).",
+		"content": map[string]any{
+			"application/json": map[string]any{"schema": openAPISchemaRef(method.Input)},
+		},
+	}
+	operation["responses"] = map[string]any{
+		"101": map[string]any{
+			"description": "Switching Protocols. Each message sent by the server is described by this schema.",
+			"content": map[string]any{
+				"application/json": map[string]any{"schema": openAPISchemaRef(method.Output)},
+			},
+		},
+		"default": map[string]any{"description": "Error"},
+	}
+	operation["x-codeSamples"] = []any{map[string]any{
+		"lang":  "JavaScript",
+		"label": "WebSocket",
+		"source": "const ws = new WebSocket(`wss://${location.host}/bleep/api/v1" + path + "?token=${accessToken}`);\n" +
+			"ws.onopen = () => ws.send(JSON.stringify({ /* " + string(method.Input.Desc.Name()) + " */ }));\n" +
+			"ws.onmessage = (event) => console.log(JSON.parse(event.data)); // " + string(method.Output.Desc.Name()) + "\n",
+	}}
+	return operation
+}
+
+// openAPISummary returns the first sentence (or paragraph) of a description.
+func openAPISummary(description string) string {
+	summary, _, _ := strings.Cut(description, "\n\n")
+	summary = strings.ReplaceAll(summary, "\n", " ")
+	if i := strings.Index(summary, ". "); i >= 0 {
+		summary = summary[:i+1]
+	}
+	return summary
 }
 
 func openAPIVersion(opts *options) string {
@@ -314,12 +394,19 @@ func addOpenAPISchema(schemas map[string]any, message *protogen.Message) {
 		"type":       "object",
 		"properties": map[string]any{},
 	}
+	if description := openAPIComment(message.Comments); description != "" {
+		schema["description"] = description
+	}
 	schemas[name] = schema
 	properties := schema["properties"].(map[string]any)
 	oneofFields := map[protoreflect.Name][]string{}
 
 	for _, field := range message.Fields {
-		properties[field.Desc.JSONName()] = openAPIFieldSchema(schemas, field)
+		fieldSchema := openAPIFieldSchema(schemas, field)
+		if description := openAPIComment(field.Comments); description != "" {
+			fieldSchema["description"] = description
+		}
+		properties[field.Desc.JSONName()] = fieldSchema
 		if oneof := field.Desc.ContainingOneof(); oneof != nil && !oneof.IsSynthetic() {
 			oneofFields[oneof.Name()] = append(oneofFields[oneof.Name()], field.Desc.JSONName())
 		}
@@ -397,11 +484,27 @@ func openAPISingularFieldSchema(schemas map[string]any, field *protogen.Field) m
 	case protoreflect.DoubleKind:
 		return map[string]any{"type": "number", "format": "double"}
 	case protoreflect.EnumKind:
-		values := make([]int32, 0, field.Enum.Desc.Values().Len())
-		for index := 0; index < field.Enum.Desc.Values().Len(); index++ {
-			values = append(values, int32(field.Enum.Desc.Values().Get(index).Number()))
+		values := make([]int32, 0, len(field.Enum.Values))
+		names := make([]string, 0, len(field.Enum.Values))
+		var legend strings.Builder
+		if description := openAPIComment(field.Enum.Comments); description != "" {
+			legend.WriteString(description)
+			legend.WriteString("\n\n")
 		}
-		return map[string]any{"type": "integer", "enum": values}
+		for _, value := range field.Enum.Values {
+			values = append(values, int32(value.Desc.Number()))
+			names = append(names, string(value.Desc.Name()))
+			fmt.Fprintf(&legend, "- `%d` `%s`", value.Desc.Number(), value.Desc.Name())
+			if description := openAPIComment(value.Comments); description != "" {
+				legend.WriteString(": " + strings.ReplaceAll(description, "\n", " "))
+			}
+			legend.WriteString("\n")
+		}
+		schema := map[string]any{"type": "integer", "enum": values, "x-enum-varnames": names}
+		if description := strings.TrimSpace(legend.String()); description != "" {
+			schema["description"] = description
+		}
+		return schema
 	case protoreflect.MessageKind, protoreflect.GroupKind:
 		addOpenAPISchema(schemas, field.Message)
 		return openAPISchemaRef(field.Message)
